@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cast Receiver</title>
+
+  <!-- Cast Receiver SDK -->
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #13131a;
+      --accent: #ff3c3c;
+      --accent2: #ff8c42;
+      --text: #f0ede8;
+      --muted: #6b6a72;
+      --radius: 12px;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Helvetica Neue', Helvetica, sans-serif;
+      overflow: hidden;
+    }
+
+    /* ── Idle screen (affiché quand aucune vidéo) ── */
+    #idle-screen {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 20px;
+      background: var(--bg);
+      transition: opacity 0.6s ease;
+      z-index: 10;
+    }
+
+    #idle-screen.hidden { opacity: 0; pointer-events: none; }
+
+    .logo-wrap {
+      display: flex; align-items: center; gap: 14px;
+      margin-bottom: 8px;
+    }
+
+    .logo-icon {
+      width: 56px; height: 56px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    .logo-icon svg { width: 28px; height: 28px; fill: #fff; }
+
+    .logo-text {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text);
+    }
+
+    .logo-text span { color: var(--accent); }
+
+    .idle-subtitle {
+      font-size: 16px;
+      color: var(--muted);
+      letter-spacing: 0.4px;
+    }
+
+    /* ── Barre d'info (titre + progression) ── */
+    #info-bar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      padding: 28px 48px 36px;
+      background: linear-gradient(to top, rgba(0,0,0,0.92) 0%, transparent 100%);
+      display: flex; flex-direction: column; gap: 10px;
+      z-index: 20;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.4s ease, transform 0.4s ease;
+      pointer-events: none;
+    }
+
+    #info-bar.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #video-title {
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .progress-row {
+      display: flex; align-items: center; gap: 14px;
+    }
+
+    #progress-bar-wrap {
+      flex: 1;
+      height: 4px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 2px;
+      transition: width 0.5s linear;
+    }
+
+    #time-display {
+      font-size: 13px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* ── Player iframe (YouTube embed) ── */
+    #player-wrap {
+      position: fixed; inset: 0;
+      z-index: 5;
+      background: #000;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+
+    #player-wrap.visible { opacity: 1; }
+
+    #yt-iframe {
+      width: 100%; height: 100%;
+      border: none;
+    }
+
+    /* ── État lecture/pause ── */
+    #state-badge {
+      position: fixed;
+      top: 36px; right: 48px;
+      z-index: 30;
+      display: flex; align-items: center; gap: 8px;
+      font-size: 14px;
+      color: var(--muted);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    #state-badge.visible { opacity: 1; }
+
+    .badge-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.75); }
+    }
+
+    .badge-dot.paused {
+      animation: none;
+      background: var(--muted);
+    }
+
+    /* ── Écran erreur ── */
+    #error-screen {
+      position: fixed; inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px;
+      background: var(--bg);
+      z-index: 50;
+    }
+
+    #error-screen.visible { display: flex; }
+
+    .error-icon {
+      font-size: 52px;
+    }
+
+    .error-title {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .error-msg {
+      font-size: 15px;
+      color: var(--muted);
+      text-align: center;
+      max-width: 480px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Idle ── -->
+<div id="idle-screen">
+  <div class="logo-wrap">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+    </div>
+    <div class="logo-text">Work<span>out</span></div>
+  </div>
+  <div class="idle-subtitle">En attente de contenu…</div>
+</div>
+
+<!-- ── Player ── -->
+<div id="player-wrap">
+  <iframe
+    id="yt-iframe"
+    allow="autoplay; fullscreen"
+    allowfullscreen
+  ></iframe>
+</div>
+
+<!-- ── Barre info ── -->
+<div id="info-bar">
+  <div id="video-title">Entraînement</div>
+  <div class="progress-row">
+    <div id="progress-bar-wrap">
+      <div id="progress-bar"></div>
+    </div>
+    <div id="time-display">0:00 / 0:00</div>
+  </div>
+</div>
+
+<!-- ── Badge état ── -->
+<div id="state-badge">
+  <div class="badge-dot" id="badge-dot"></div>
+  <span id="badge-label">Lecture</span>
+</div>
+
+<!-- ── Erreur ── -->
+<div id="error-screen">
+  <div class="error-icon">⚠️</div>
+  <div class="error-title">Impossible de lire la vidéo</div>
+  <div class="error-msg" id="error-msg">Cette vidéo est restreinte par YouTube. Essayez de la lire directement sur votre appareil.</div>
+</div>
+
+<script>
+// ─── Cast Receiver SDK ───────────────────────────────────────────────────────
+const context  = cast.framework.CastReceiverContext.getInstance();
+const manager  = context.getPlayerManager();
+
+// ─── Éléments DOM ────────────────────────────────────────────────────────────
+const idleScreen   = document.getElementById('idle-screen');
+const playerWrap   = document.getElementById('player-wrap');
+const infoBar      = document.getElementById('info-bar');
+const stateBadge   = document.getElementById('state-badge');
+const badgeDot     = document.getElementById('badge-dot');
+const badgeLabel   = document.getElementById('badge-label');
+const ytIframe     = document.getElementById('yt-iframe');
+const videoTitle   = document.getElementById('video-title');
+const progressBar  = document.getElementById('progress-bar');
+const timeDisplay  = document.getElementById('time-display');
+const errorScreen  = document.getElementById('error-screen');
+const errorMsg     = document.getElementById('error-msg');
+
+// ─── État interne ─────────────────────────────────────────────────────────────
+let ytPlayer       = null;
+let pollInterval   = null;
+let duration       = 0;
+let isPlaying      = false;
+let hideBarTimer   = null;
+let ytReady        = false;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function formatTime(sec) {
+  if (!sec || isNaN(sec)) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function showInfoBar() {
+  infoBar.classList.add('visible');
+  stateBadge.classList.add('visible');
+  clearTimeout(hideBarTimer);
+  hideBarTimer = setTimeout(() => {
+    infoBar.classList.remove('visible');
+  }, 4000);
+}
+
+function setPlayState(playing) {
+  isPlaying = playing;
+  badgeDot.classList.toggle('paused', !playing);
+  badgeLabel.textContent = playing ? 'Lecture' : 'Pause';
+  showInfoBar();
+}
+
+// ─── YouTube IFrame API ───────────────────────────────────────────────────────
+// Chargement du script YT (une fois)
+const ytScript = document.createElement('script');
+ytScript.src = 'https://www.youtube.com/iframe_api';
+document.head.appendChild(ytScript);
+
+// Callback global attendu par l'API YT
+window.onYouTubeIframeAPIReady = function() {
+  ytReady = true;
+  // Si un load était en attente, on déclenche
+  if (window._pendingVideoId) {
+    loadYouTube(window._pendingVideoId, window._pendingStartTime || 0, window._pendingTitle || '');
+  }
+};
+
+function loadYouTube(videoId, startTime, title) {
+  if (!ytReady) {
+    // L'API n'est pas encore prête, on met en attente
+    window._pendingVideoId  = videoId;
+    window._pendingStartTime = startTime;
+    window._pendingTitle    = title;
+    return;
+  }
+
+  // Réinitialise l'état en attente
+  window._pendingVideoId = null;
+
+  videoTitle.textContent = title || 'Entraînement';
+  errorScreen.classList.remove('visible');
+
+  if (ytPlayer) {
+    // Réutilise le player existant
+    ytPlayer.loadVideoById({ videoId, startSeconds: startTime });
+    return;
+  }
+
+  // Création du player (remplace l'iframe existante par un div)
+  const container = document.createElement('div');
+  container.id = 'yt-player-container';
+  playerWrap.innerHTML = '';
+  playerWrap.appendChild(container);
+
+  ytPlayer = new YT.Player('yt-player-container', {
+    videoId,
+    playerVars: {
+      autoplay: 1,
+      controls: 0,         // pas de contrôles YT (le receiver gère)
+      start: Math.floor(startTime),
+      rel: 0,
+      modestbranding: 1,
+      iv_load_policy: 3,
+      playsinline: 1,
+    },
+    width:  '100%',
+    height: '100%',
+    events: {
+      onReady(e) {
+        duration = e.target.getDuration();
+        e.target.playVideo();
+        playerWrap.classList.add('visible');
+        idleScreen.classList.add('hidden');
+        stateBadge.classList.add('visible');
+        showInfoBar();
+        startPolling();
+      },
+      onStateChange(e) {
+        const S = YT.PlayerState;
+        if (e.data === S.PLAYING) {
+          setPlayState(true);
+          duration = e.target.getDuration();
+          // Informe le SDK Cast que la lecture a démarré
+          manager.broadcastStatus();
+        } else if (e.data === S.PAUSED) {
+          setPlayState(false);
+        } else if (e.data === S.ENDED) {
+          stopPolling();
+          // Signale la fin au SDK
+          manager.broadcastStatus();
+          setTimeout(showIdle, 1500);
+        }
+      },
+      onError(e) {
+        console.error('[YT] error', e.data);
+        stopPolling();
+        showError(e.data);
+      },
+    },
+  });
+}
+
+// ─── Polling progression ──────────────────────────────────────────────────────
+function startPolling() {
+  stopPolling();
+  pollInterval = setInterval(() => {
+    if (!ytPlayer || typeof ytPlayer.getCurrentTime !== 'function') return;
+    const current = ytPlayer.getCurrentTime() || 0;
+    const dur     = ytPlayer.getDuration()    || duration || 1;
+    const pct     = Math.min(100, (current / dur) * 100);
+
+    progressBar.style.width = pct + '%';
+    timeDisplay.textContent = `${formatTime(current)} / ${formatTime(dur)}`;
+
+    // Rapporte la position au SDK Cast (pour l'app mobile)
+    try {
+      manager.setMediaTime(current);
+    } catch (_) {}
+  }, 1000);
+}
+
+function stopPolling() {
+  clearInterval(pollInterval);
+  pollInterval = null;
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+function showIdle() {
+  stopPolling();
+  playerWrap.classList.remove('visible');
+  idleScreen.classList.remove('hidden');
+  infoBar.classList.remove('visible');
+  stateBadge.classList.remove('visible');
+  errorScreen.classList.remove('visible');
+}
+
+function showError(code) {
+  const messages = {
+    2:   'ID de vidéo invalide.',
+    5:   'Erreur de lecture HTML5.',
+    100: 'Vidéo introuvable ou supprimée.',
+    101: 'La lecture de cette vidéo est restreinte par YouTube.',
+    150: 'La lecture de cette vidéo est restreinte par YouTube.',
+  };
+  errorMsg.textContent = messages[code] || `Erreur YouTube (code ${code}).`;
+  errorScreen.classList.add('visible');
+  playerWrap.classList.remove('visible');
+}
+
+// ─── Interception des messages Cast ──────────────────────────────────────────
+// L'app mobile envoie un LOAD avec contentUrl = https://www.youtube.com/watch?v=VIDEO_ID
+// On extrait l'ID et on charge l'iframe YT directement
+manager.setMessageInterceptor(
+  cast.framework.messages.MessageType.LOAD,
+  (request) => {
+    const url       = request.media?.contentUrl || '';
+    const title     = request.media?.metadata?.title || 'Entraînement';
+    const startTime = request.currentTime || 0;
+
+    // Extrait l'ID depuis l'URL YouTube
+    let videoId = null;
+    try {
+      const u = new URL(url);
+      videoId = u.searchParams.get('v') || u.pathname.replace('/', '');
+    } catch (_) {
+      // Si l'URL est déjà un ID brut
+      videoId = url;
+    }
+
+    if (!videoId) {
+      console.error('[Receiver] videoId introuvable dans :', url);
+      return null; // Annule le LOAD
+    }
+
+    console.log(`[Receiver] LOAD videoId=${videoId} startTime=${startTime}`);
+    loadYouTube(videoId, startTime, title);
+
+    // On retourne la requête modifiée (SDK ne tente pas de streamer lui-même)
+    request.media.contentType = 'application/x-mpegurl'; // Type fictif, on gère nous-mêmes
+    return request;
+  }
+);
+
+// Commandes PLAY / PAUSE / SEEK
+manager.addEventListener(cast.framework.events.EventType.MEDIA_STATUS, (e) => {
+  // Géré via onStateChange de YT
+});
+
+// Interception PAUSE
+manager.setMessageInterceptor(
+  cast.framework.messages.MessageType.PAUSE,
+  (req) => {
+    ytPlayer?.pauseVideo();
+    return req;
+  }
+);
+
+// Interception PLAY
+manager.setMessageInterceptor(
+  cast.framework.messages.MessageType.PLAY,
+  (req) => {
+    ytPlayer?.playVideo();
+    return req;
+  }
+);
+
+// Interception SEEK
+manager.setMessageInterceptor(
+  cast.framework.messages.MessageType.SEEK,
+  (req) => {
+    if (req.currentTime != null && ytPlayer) {
+      ytPlayer.seekTo(req.currentTime, true);
+      showInfoBar();
+    }
+    return req;
+  }
+);
+
+// Interception STOP
+manager.setMessageInterceptor(
+  cast.framework.messages.MessageType.STOP,
+  (req) => {
+    ytPlayer?.stopVideo();
+    showIdle();
+    return req;
+  }
+);
+
+// ─── Démarrage du SDK ─────────────────────────────────────────────────────────
+context.start({
+  touchScreenOptimizedApp: false,
+  // Désactive le player natif CAF — on gère tout nous-mêmes via YT IFrame API
+  playbackConfig: new cast.framework.PlaybackConfig(),
+  customNamespaces: {},
+  maxInactivity: 3600, // 1h avant déconnexion
+});
+
+console.log('[Receiver] Cast Receiver démarré');
+</script>
+</body>
+</html>
